@@ -2,7 +2,7 @@ name: Cap nhat thuy van IWE
 on:
   workflow_dispatch: 
   schedule:
-    - cron: '0 * * * *'
+    - cron: */5 * * * *' # Chạy mỗi 5 phút một lần
 
 jobs:
   run_scraper:
