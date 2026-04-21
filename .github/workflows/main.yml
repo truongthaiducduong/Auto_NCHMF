@@ -3,7 +3,8 @@ name: Cap nhat thuy van IWE
 on:
   workflow_dispatch:
   schedule:
-    - cron: '*/5 * * * *'
+    # 00:00 UTC tương ứng với 07:00 AM giờ Việt Nam
+    - cron: '0 0 * * *'
 
 jobs:
   run_scraper:
