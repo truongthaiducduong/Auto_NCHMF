@@ -1,16 +1,17 @@
 name: Cap nhat thuy van IWE
+
 on:
-  workflow_dispatch: 
+  workflow_dispatch:
   schedule:
-    - cron: */5 * * * *' # Chạy mỗi 5 phút một lần
+    - cron: '*/5 * * * *'
 
 jobs:
   run_scraper:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4 # Nâng cấp lên v4 để hết cảnh báo
+      - uses: actions/checkout@v4
       - name: Set up Python
-        uses: actions/setup-python@v5 # Nâng cấp lên v5 để hết cảnh báo
+        uses: actions/setup-python@v5
         with:
           python-version: '3.10'
       - name: Install dependencies
