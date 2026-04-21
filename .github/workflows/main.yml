@@ -1,0 +1,20 @@
+name: Cap nhat thuy van IWE
+on:
+  workflow_dispatch: # Cho phép anh bấm nút chạy thủ công
+  schedule:
+    - cron: '0 * * * *' # Tự động chạy vào phút thứ 0 mỗi giờ (Nếu anh muốn)
+
+jobs:
+  run_scraper:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+      - name: Install dependencies
+        run: |
+          pip install requests beautifulsoup4 pandas pdfplumber
+      - name: Run Scraper
+        run: python main.py
