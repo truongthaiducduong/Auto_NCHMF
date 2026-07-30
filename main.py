@@ -1,76 +1,112 @@
 import requests
 from bs4 import BeautifulSoup
-import pdfplumber
-import pandas as pd
+import fitz  # PyMuPDF
 import re
-import unicodedata
 
-# --- CẤU HÌNH ---
+# --- CẤU HÌNH CỦA CHỦ NHÂN ---
 WEB_APP_URL = "https://script.google.com/macros/s/AKfycbz59xIGaV_ymrEAdutZ9axDj-gkVXauJZ6eMrIKXukgSUCgV9VQC3zCNStFc0QyAANw/exec"
 TARGET_STATIONS = ["Hòa Bình", "Yên Bái", "Phú Thọ", "Tuyên Quang", "Vụ Quang", "Hà Nội"]
 HEADERS = {'User-Agent': 'Mozilla/5.0'}
 
-def clean_and_split(val):
-    if val is None: return [""]
-    parts = re.split(r'\n{2,}|\s{2,}', str(val).strip())
-    return [p.strip() for p in parts if p.strip()]
-
-def get_num(v):
-    if not v: return ""
-    return re.sub(r'[^\d.-]', '', str(v))
-
-def process_one_pdf(pdf_url):
+def process_one_pdf_regex(pdf_url):
     try:
-        res = requests.get(pdf_url, timeout=20)
-        with open("temp.pdf", "wb") as f: f.write(res.content)
+        # Kéo PDF về tổ
+        res = requests.get(pdf_url, timeout=20, headers=HEADERS)
+        pdf_path = "temp.pdf"
+        with open(pdf_path, "wb") as f: 
+            f.write(res.content)
+            
+        doc = fitz.open(pdf_path)
+        
+        # 1. Bắt Năm từ trang đầu tiên
+        year = "2026"
+        year_match = re.search(r'năm (\d{4})', doc[0].get_text())
+        if year_match:
+            year = year_match.group(1)
+        else:
+            # Backup: Lấy năm từ URL
+            year_url = re.search(r'/(\d{4})/', pdf_url)
+            if year_url:
+                year = year_url.group(1)
+
+        # 2. Rà soát lấy đúng văn bản chứa Bảng II
+        target_text = ""
+        for page in doc:
+            text = page.get_text()
+            if "Hòa Bình" in text and "Yên Bái" in text:
+                target_text = text
+                break
+                
+        if not target_text:
+            return []
+
+        # 3. Móc 4 mốc thời gian thực đo bằng Regex
+        # Bắt các chuỗi dạng: "13h-\n27/07" hoặc "13h-28/07"
+        time_pattern = r'(\d{1,2})h-?\s*(\d{1,2})/(\d{1,2})'
+        all_times = re.findall(time_pattern, target_text)
+        actual_times = all_times[:4]  # Chém lấy đúng 4 mốc đầu tiên
+        
+        if not actual_times:
+            return []
+
+        # 4. Móc số liệu của từng trạm
+        station_data = {}
+        lines = target_text.split('\n')
+        
+        for st in TARGET_STATIONS:
+            st_vals = ["", "", "", ""]
+            for idx, line in enumerate(lines):
+                # Tìm đúng dòng chứa tên trạm
+                if st.lower() in line.lower():
+                    val_idx = 0
+                    # Rà soát các dòng ngay bên dưới nó
+                    for next_line in lines[idx+1:]:
+                        next_line = next_line.strip()
+                        if not next_line:
+                            continue
+                        
+                        # Nếu dòng đó chứa số (có thể có dấu âm, dấu thập phân)
+                        if re.match(r'^-?[\d.]+$', next_line):
+                            st_vals[val_idx] = next_line
+                            val_idx += 1
+                            if val_idx == 4: # Lấy đủ 4 mốc thì dừng
+                                break
+                        elif re.search(r'[a-zA-Z]', next_line):
+                            # Nếu đụng phải chữ cái (tên trạm khác) -> Dừng ngay
+                            break
+                    break
+            station_data[st] = st_vals
+
+        # 5. Ép khuôn JSON giống hệt đầu ra của Chủ nhân
         extracted_rows = []
-        with pdfplumber.open("temp.pdf") as pdf:
-            year_match = re.search(r'năm (\d{4})', pdf.pages[0].extract_text() or "")
-            year = year_match.group(1) if year_match else "2026"
+        for i, time_tuple in enumerate(actual_times):
+            h, d, m = time_tuple
+            unique_id = f"{year}-{int(m)}-{int(d)}-{int(h)}"
             
-            target_page = next(p for p in pdf.pages if "Hòa Bình" in (p.extract_text() or "") and "Yên Bái" in (p.extract_text() or ""))
-            df_raw = pd.DataFrame(target_page.extract_table())
-            
-            raw_headers = df_raw.iloc[1, 2:].values
-            all_times = []
-            for h in raw_headers: all_times.extend(clean_and_split(h))
-            actual_times = all_times[:4] 
-
-            station_data = {}
+            entry = {
+                "ID_Match": unique_id,
+                "Giờ": int(h)
+            }
             for st in TARGET_STATIONS:
-                row = df_raw[df_raw[1].str.contains(st, na=False, case=False)]
-                if not row.empty:
-                    raw_vals = row.iloc[0, 2:].values
-                    vals_split = []
-                    for v in raw_vals: vals_split.extend(clean_and_split(v))
-                    station_data[st] = vals_split
-
-            for i, time_str in enumerate(actual_times):
-                match = re.search(r'(\d+)h-?(\d+)/(\d+)', time_str.replace('\n', '').replace(' ', ''))
-                if match:
-                    h, d, m = match.groups()
-                    unique_id = f"{year}-{int(m)}-{int(d)}-{int(h)}"
-                    entry = {
-                        "Ngày": f"{int(d)}/{int(m)}/{year}",
-                        "Giờ": int(h),
-                        "ID_Match": unique_id 
-                    }
-                    for st in TARGET_STATIONS:
-                        try: val = get_num(station_data[st][i])
-                        except: val = ""
-                        entry[st] = val
-                    extracted_rows.append(entry)
+                entry[st] = station_data[st][i]
+                
+            extracted_rows.append(entry)
+            
         return extracted_rows
-    except: return []
+        
+    except Exception as e:
+        print(f"      [!] Lỗi khi chém PDF {pdf_url.split('/')[-1]}: {e}")
+        return []
 
-print("--- 🚀 KHỞI ĐỘNG QUY TRÌNH QUÉT TỰ ĐỘNG ---")
+print("--- 🚀 KHỞI ĐỘNG CỖ MÁY SÁT THỦ BẰNG REGEX (SIÊU TỐC ĐỘ) ---")
 all_data = []
 
+# Chủ nhân có thể để range(1, 3) nếu muốn vét lại 20 ngày, hoặc range(1, 2) cho Daily
 for page in range(1, 3):
     print(f"🔎 Đang rà soát trang {page}...")
     list_url = f"https://nchmf.gov.vn/kttv/vi-VN/1/du-bao-han-ngan-13-18.html?pageindex={page}"
     try:
-        soup = BeautifulSoup(requests.get(list_url, headers=HEADERS).text, 'html.parser')
+        soup = BeautifulSoup(requests.get(list_url, headers=HEADERS, timeout=10).text, 'html.parser')
         links = []
         for a in soup.select('a'):
             t = a.text.upper()
@@ -80,20 +116,24 @@ for page in range(1, 3):
         
         for link in list(dict.fromkeys(links)):
             try:
-                p_soup = BeautifulSoup(requests.get(link, headers=HEADERS).text, 'html.parser')
+                p_soup = BeautifulSoup(requests.get(link, headers=HEADERS, timeout=10).text, 'html.parser')
                 pdf = next((a['href'] for a in p_soup.find_all('a', href=True) if ".pdf" in a['href'].lower()), "")
                 if pdf:
                     pdf_url = pdf if pdf.startswith('http') else "https://nchmf.gov.vn" + pdf
-                    data = process_one_pdf(pdf_url)
+                    print(f"Đang băm nhỏ dữ liệu: {pdf_url.split('/')[-1]}")
+                    
+                    data = process_one_pdf_regex(pdf_url)
                     if data:
                         all_data.extend(data)
-                        print(f"   -> Đã bóc xong: {pdf_url.split('/')[-1]}")
+                        print(f"   -> Đã lấy thành công!")
             except: continue
     except: continue
 
+# Bắn thẳng dữ liệu lên Apps Script
 if all_data:
-    print(f"\n--- 📊 TỔNG KẾT: THU ĐƯỢC {len(all_data)} DÒNG THỰC ĐO ---")
-    payload = [[r['ID_Match'], r['Giờ']] + [r[st] for st in TARGET_STATIONS] for r in all_data]
+    print(f"\n--- 📊 TỔNG KẾT: THU ĐƯỢC {len(all_data)} DÒNG THỰC ĐO TỪ BẢNG II ---")
+    payload = [[r.get('ID_Match', ''), r.get('Giờ', '')] + [r.get(st, '') for st in TARGET_STATIONS] for r in all_data]
+    
     try:
         response = requests.post(WEB_APP_URL, json=payload)
         print(f"🏁 Kết quả từ Apps Script: {response.text}")
